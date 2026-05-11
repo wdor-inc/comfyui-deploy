@@ -852,14 +852,22 @@ const ext = {
                 true
               );
             } catch (error) {
-              console.warning(
+              console.warn(
                 "Error setting validation to false, is fine to ignore this",
                 error
               );
             }
             console.log("loadGraphData");
-            app.loadGraphData(comfyUIWorkflow);
-            sendEventToCD("graph_loaded");
+            try {
+              await app.loadGraphData(comfyUIWorkflow);
+              sendEventToCD("graph_loaded");
+            } catch (error) {
+              console.error("[cd_plugin] graph_load failed:", error);
+              sendEventToCD("graph_load_error", {
+                message: String(error?.message ?? error),
+                stack: error?.stack ?? null,
+              });
+            }
           }
         } else if (message.type === "deploy") {
           // deployWorkflow();
@@ -976,7 +984,11 @@ const ext = {
         //   sendEventToCD("cd_plugin_onRefresh");
         // }
       } catch (error) {
-        // console.error("Error processing message:", error);
+        console.error("[cd_plugin] Error processing message:", error);
+        sendEventToCD("error", {
+          message: String(error?.message ?? error),
+          stack: error?.stack ?? null,
+        });
       }
     });
 
