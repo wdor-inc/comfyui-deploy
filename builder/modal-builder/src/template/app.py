@@ -45,8 +45,15 @@ if not deploy_test:
         )
         .apt_install("libgl1-mesa-glx", "libglib2.0-0")
         .run_commands(
-            # Basic comfyui setup
             "git clone https://github.com/comfyanonymous/ComfyUI.git /comfyui",
+        )
+        .copy_local_file(
+            f"{current_directory}/data/snapshot.json",
+            "/comfyui-launch-snapshot.json",
+        )
+        .run_commands(
+            # Check out the snapshot comfyui commit before installing requirements.
+            "python -c \"import json,subprocess; rev=json.load(open('/comfyui-launch-snapshot.json'))['comfyui']; subprocess.check_call(['git','-C','/comfyui','checkout',rev])\"",
             "cd /comfyui && pip install xformers!=0.0.18 -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu121",
 
             # Install comfyui manager

@@ -10,7 +10,6 @@ import random
 import traceback
 import uuid
 import asyncio
-import inspect
 from urllib.parse import quote, urlencode
 import threading
 import hashlib
@@ -24,6 +23,7 @@ import atexit
 from model_management import get_torch_device
 import torch
 import psutil
+from workflow_compat import forward_execute_args
 
 # Global session
 client_session = None
@@ -1327,44 +1327,21 @@ try:
     is_async = asyncio.iscoroutinefunction(origin_execute)
 
     if is_async:
-        # Check signature for backward compatibility (v0.3.67 has 10 params, v0.3.68+ has 11)
-        sig = inspect.signature(origin_execute)
-        has_ui_outputs = len(sig.parameters) >= 11
-
-        async def swizzle_execute(
-            server,
-            dynprompt,
-            caches,
-            current_item,
-            extra_data,
-            executed,
-            prompt_id,
-            execution_list,
-            pending_subgraph_results,
-            pending_async_nodes,
-            ui_outputs=None,
-        ):
+        # v0.3.67 passes 10 positional args, v0.3.68 adds ui_outputs, v0.44.0 adds
+        # asset_manager. Accept whatever this install passes and forward the
+        # prefix its execute() declares.
+        async def swizzle_execute(*args, **kwargs):
+            server = args[0]
+            dynprompt = args[1]
+            current_item = args[3]
+            prompt_id = args[6]
             unique_id = current_item
             class_type = dynprompt.get_node(unique_id)["class_type"]
             last_node_id = server.last_node_id
 
-            # Build args list - add ui_outputs only for v0.3.68+
-            args = [
-                server,
-                dynprompt,
-                caches,
-                current_item,
-                extra_data,
-                executed,
-                prompt_id,
-                execution_list,
-                pending_subgraph_results,
-                pending_async_nodes,
-            ]
-            if has_ui_outputs:
-                args.append(ui_outputs)
-
-            result = await origin_execute(*args)
+            result = await origin_execute(
+                *forward_execute_args(origin_execute, args), **kwargs
+            )
 
             handle_execute(class_type, last_node_id, prompt_id, server, unique_id)
             return result

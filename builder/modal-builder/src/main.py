@@ -120,7 +120,7 @@ def read_root():
 # {
 #     name: "my first image",
 #     deps: {
-#         "comfyui": "d0165d819afe76bd4e6bdd710eb5f3e571b6a804",
+#         "comfyui": "2c75dc1b379a59e0880619d029607af5169a62ef",
 #         "git_custom_nodes": {
 #             "https://github.com/cubiq/ComfyUI_IPAdapter_plus": {
 #                 "hash": "2ca0c6dd0b2ad64b1c480828638914a564331dcd",
