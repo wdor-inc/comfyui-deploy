@@ -22,10 +22,10 @@ RUN ln -s /usr/bin/python3 /usr/bin/python
 # Clean up to reduce image size
 RUN apt-get autoremove -y && apt-get clean -y && rm -rf /var/lib/apt/lists/*
 
-# Clone ComfyUI repository
-RUN git clone https://github.com/comfyanonymous/ComfyUI.git /comfyui
-# ComfyUI v0.44.0
-RUN cd /comfyui && git reset --hard 2c75dc1b379a59e0880619d029607af5169a62ef
+COPY /data/snapshot.json /tmp/comfyui-launch-snapshot.json
+COPY /data/checkout_comfyui.sh /tmp/checkout_comfyui.sh
+RUN git clone https://github.com/comfyanonymous/ComfyUI.git /comfyui \
+ && sh /tmp/checkout_comfyui.sh /tmp/comfyui-launch-snapshot.json /comfyui
 
 # Change working directory to ComfyUI
 WORKDIR /comfyui

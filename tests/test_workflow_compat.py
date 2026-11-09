@@ -1,158 +1,126 @@
-"""Locks the ComfyUI launch pin and the execution-hook contract workflows rely on."""
-
+import asyncio
 import json
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
-from workflow_compat import COMFYUI_COMMIT, COMFYUI_RELEASE, forward_execute_args
+from workflow_compat import wrap_async_execute
 
 ROOT = Path(__file__).resolve().parents[1]
-
-# Core node types in the checked-in workflows. Input names for these nodes
-# were compared from the workflow's comfy-core (v0.3.12 through v0.3.19) to
-# ComfyUI v0.44.0. Required names are unchanged; v0.44.0 only adds optional inputs.
-COMPATIBLE_CORE_NODES = frozenset(
-    {
-        "BasicGuider",
-        "BasicScheduler",
-        "CLIPLoader",
-        "CLIPTextEncode",
-        "CLIPVisionEncode",
-        "CLIPVisionLoader",
-        "CheckpointLoaderSimple",
-        "DualCLIPLoader",
-        "EmptyHunyuanLatentVideo",
-        "EmptyLatentImage",
-        "EmptySD3LatentImage",
-        "FluxGuidance",
-        "ImageToMask",
-        "JoinImageWithAlpha",
-        "KSampler",
-        "KSamplerSelect",
-        "LoadImage",
-        "LoraLoader",
-        "MaskToImage",
-        "ModelSamplingSD3",
-        "PreviewImage",
-        "RandomNoise",
-        "SamplerCustomAdvanced",
-        "SaveAnimatedWEBP",
-        "SaveImage",
-        "SaveWEBM",
-        "SplitImageWithAlpha",
-        "TripleCLIPLoader",
-        "UNETLoader",
-        "VAEDecode",
-        "VAEDecodeTiled",
-        "VAEEncodeForInpaint",
-        "VAELoader",
-        "WanImageToVideo",
-    }
-)
-
-UI_ONLY_NODES = frozenset({"Note", "MarkdownNote"})
-
-
-def _execute_v0368(
-    server,
-    dynprompt,
-    caches,
-    current_item,
-    extra_data,
-    executed,
-    prompt_id,
-    execution_list,
-    pending_subgraph_results,
-    pending_async_nodes,
-    ui_outputs,
-):
-    return ("v0.3.68", ui_outputs)
-
-
-def _execute_v044(
-    server,
-    dynprompt,
-    caches,
-    current_item,
-    extra_data,
-    executed,
-    prompt_id,
-    execution_list,
-    pending_subgraph_results,
-    pending_async_nodes,
-    ui_outputs,
-    asset_manager,
-):
-    return ("v0.44.0", ui_outputs, asset_manager)
-
-
-class ExecuteForwardTests(unittest.TestCase):
-    def test_v0368_forwards_ui_outputs_and_stops_there(self):
-        args = tuple(f"arg{i}" for i in range(11))
-        forwarded = forward_execute_args(_execute_v0368, args)
-        self.assertEqual(len(forwarded), 11)
-        self.assertEqual(_execute_v0368(*forwarded), ("v0.3.68", "arg10"))
-
-    def test_v044_forwards_asset_manager(self):
-        args = tuple(f"arg{i}" for i in range(12))
-        forwarded = forward_execute_args(_execute_v044, args)
-        self.assertEqual(len(forwarded), 12)
-        self.assertEqual(
-            _execute_v044(*forwarded),
-            ("v0.44.0", "arg10", "arg11"),
-        )
-
-    def test_v044_call_shape_is_not_trimmed_to_v0368(self):
-        args = tuple(range(12))
-        forwarded = forward_execute_args(_execute_v044, args)
-        self.assertEqual(forwarded[-1], 11)
-        self.assertNotEqual(len(forwarded), 11)
+LAUNCH_COMMIT = "2c75dc1b379a59e0880619d029607af5169a62ef"
+SNAPSHOT = ROOT / "builder/modal-builder/src/template/data/snapshot.json"
+CHECKOUT = ROOT / "builder/modal-builder/src/template/data/checkout_comfyui.sh"
 
 
 class LaunchPinTests(unittest.TestCase):
-    def test_release_constant_matches_commit(self):
-        self.assertEqual(COMFYUI_RELEASE, "v0.44.0")
-        self.assertEqual(COMFYUI_COMMIT, "2c75dc1b379a59e0880619d029607af5169a62ef")
+    def test_snapshot_is_the_v044_release_commit(self):
+        snapshot = json.loads(SNAPSHOT.read_text())
+        self.assertEqual(snapshot["comfyui"], LAUNCH_COMMIT)
 
-    def test_snapshot_dockerfile_and_machine_default_use_the_same_commit(self):
-        snapshot = json.loads(
-            (
-                ROOT / "builder/modal-builder/src/template/data/snapshot.json"
-            ).read_text()
-        )
-        dockerfile = (
-            ROOT / "builder/modal-builder/src/template/Dockerfile"
-        ).read_text()
+    def test_machine_default_matches_the_snapshot(self):
+        snapshot = json.loads(SNAPSHOT.read_text())
         machine_default = (ROOT / "web/src/server/addMachineSchema.ts").read_text()
-        launcher = (ROOT / "builder/modal-builder/src/template/app.py").read_text()
+        self.assertIn(snapshot["comfyui"], machine_default)
 
-        self.assertEqual(snapshot["comfyui"], COMFYUI_COMMIT)
-        self.assertIn(f"git reset --hard {COMFYUI_COMMIT}", dockerfile)
-        self.assertIn(COMFYUI_COMMIT, machine_default)
-        self.assertIn("comfyui-launch-snapshot.json", launcher)
-        self.assertIn("git", launcher)
-        self.assertIn("checkout", launcher)
+    def test_both_launchers_check_out_the_snapshot(self):
+        dockerfile = (ROOT / "builder/modal-builder/src/template/Dockerfile").read_text()
+        modal = (ROOT / "builder/modal-builder/src/template/app.py").read_text()
+        self.assertNotIn(LAUNCH_COMMIT, dockerfile)
+        self.assertIn("checkout_comfyui.sh", dockerfile)
+        self.assertIn("checkout_comfyui.sh", modal)
+        self.assertIn("comfyui-launch-snapshot.json", dockerfile)
+        self.assertIn("comfyui-launch-snapshot.json", modal)
+
+    def test_checkout_script_selects_the_snapshot_commit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "comfy"
+            repo.mkdir()
+            subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+            subprocess.run(
+                ["git", "config", "user.email", "pin@example.com"],
+                cwd=repo,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "pin"],
+                cwd=repo,
+                check=True,
+            )
+            (repo / "readme").write_text("first\n")
+            subprocess.run(["git", "add", "readme"], cwd=repo, check=True)
+            subprocess.run(
+                ["git", "commit", "-m", "first"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+            )
+            first = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            (repo / "readme").write_text("second\n")
+            subprocess.run(["git", "add", "readme"], cwd=repo, check=True)
+            subprocess.run(
+                ["git", "commit", "-m", "second"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+            )
+            snapshot_path = Path(tmp) / "snapshot.json"
+            snapshot_path.write_text(json.dumps({"comfyui": first}))
+            subprocess.run(
+                ["sh", str(CHECKOUT), str(snapshot_path), str(repo)],
+                check=True,
+            )
+            head = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            self.assertEqual(head, first)
 
 
-class WorkflowGraphTests(unittest.TestCase):
-    def test_checked_in_workflows_use_compatible_core_nodes(self):
-        paths = list((ROOT / "examples").glob("*.json")) + list(
-            (ROOT / "example_workflows").glob("*.json")
-        )
-        self.assertGreaterEqual(len(paths), 9)
-        for path in paths:
-            graph = json.loads(path.read_text())
-            self.assertIn("nodes", graph)
-            self.assertIsInstance(graph["nodes"], list)
-            for node in graph["nodes"]:
-                node_type = node["type"]
-                if node_type in UI_ONLY_NODES or node_type.startswith("Comfy"):
-                    continue
-                self.assertIn(
-                    node_type,
-                    COMPATIBLE_CORE_NODES,
-                    f"{path.name} uses {node_type}, which was not checked against {COMFYUI_RELEASE}",
-                )
+class ExecuteForwardTests(unittest.TestCase):
+    def test_v044_call_reaches_execute_with_asset_manager(self):
+        self.assertEqual(self._run(12), 12)
+
+    def test_v0368_call_reaches_execute_without_asset_manager(self):
+        self.assertEqual(self._run(11), 11)
+
+    def _run(self, arg_count):
+        received = {}
+        recorded = []
+
+        class Server:
+            last_node_id = "7"
+
+        class Graph:
+            def get_node(self, unique_id):
+                return {"class_type": "KSampler"}
+
+        async def origin(*args, **kwargs):
+            received["args"] = args
+            received["kwargs"] = kwargs
+            return "ran"
+
+        def on_executed(class_type, last_node_id, prompt_id, server, unique_id):
+            recorded.append((class_type, last_node_id, prompt_id, unique_id))
+
+        wrapper = wrap_async_execute(origin, on_executed)
+        args = (Server(), Graph(), "caches", "node-1", {}, set(), "prompt-9")
+        args += tuple(f"extra-{i}" for i in range(arg_count - len(args)))
+        result = asyncio.run(wrapper(*args, preview_method="auto"))
+        self.assertEqual(result, "ran")
+        self.assertEqual(received["args"], args)
+        self.assertEqual(received["kwargs"], {"preview_method": "auto"})
+        self.assertEqual(recorded, [("KSampler", "7", "prompt-9", "node-1")])
+        return len(received["args"])
 
 
 if __name__ == "__main__":

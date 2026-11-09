@@ -51,9 +51,12 @@ if not deploy_test:
             f"{current_directory}/data/snapshot.json",
             "/comfyui-launch-snapshot.json",
         )
+        .copy_local_file(
+            f"{current_directory}/data/checkout_comfyui.sh",
+            "/checkout_comfyui.sh",
+        )
         .run_commands(
-            # Check out the snapshot comfyui commit before installing requirements.
-            "python -c \"import json,subprocess; rev=json.load(open('/comfyui-launch-snapshot.json'))['comfyui']; subprocess.check_call(['git','-C','/comfyui','checkout',rev])\"",
+            "sh /checkout_comfyui.sh /comfyui-launch-snapshot.json /comfyui",
             "cd /comfyui && pip install xformers!=0.0.18 -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu121",
 
             # Install comfyui manager

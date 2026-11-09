@@ -23,7 +23,7 @@ import atexit
 from model_management import get_torch_device
 import torch
 import psutil
-from workflow_compat import forward_execute_args
+from workflow_compat import wrap_async_execute
 
 # Global session
 client_session = None
@@ -1327,24 +1327,7 @@ try:
     is_async = asyncio.iscoroutinefunction(origin_execute)
 
     if is_async:
-        # v0.3.67 passes 10 positional args, v0.3.68 adds ui_outputs, v0.44.0 adds
-        # asset_manager. Accept whatever this install passes and forward the
-        # prefix its execute() declares.
-        async def swizzle_execute(*args, **kwargs):
-            server = args[0]
-            dynprompt = args[1]
-            current_item = args[3]
-            prompt_id = args[6]
-            unique_id = current_item
-            class_type = dynprompt.get_node(unique_id)["class_type"]
-            last_node_id = server.last_node_id
-
-            result = await origin_execute(
-                *forward_execute_args(origin_execute, args), **kwargs
-            )
-
-            handle_execute(class_type, last_node_id, prompt_id, server, unique_id)
-            return result
+        swizzle_execute = wrap_async_execute(origin_execute, handle_execute)
     else:
         # Sync version for very old ComfyUI versions
         def swizzle_execute(
