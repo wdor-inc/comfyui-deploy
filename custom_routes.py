@@ -10,7 +10,6 @@ import random
 import traceback
 import uuid
 import asyncio
-import inspect
 from urllib.parse import quote, urlencode
 import threading
 import hashlib
@@ -24,6 +23,7 @@ import atexit
 from model_management import get_torch_device
 import torch
 import psutil
+from .execute_hook import install_execute_hook
 
 # Global session
 client_session = None
@@ -1322,87 +1322,7 @@ def handle_execute(class_type, last_node_id, prompt_id, server, unique_id):
         # print(f"#{unique_id} [{class_type}]: {execution_time:.2f}s - vram {vram_used}b")
 
 
-try:
-    origin_execute = execution.execute
-    is_async = asyncio.iscoroutinefunction(origin_execute)
-
-    if is_async:
-        # Check signature for backward compatibility (v0.3.67 has 10 params, v0.3.68+ has 11)
-        sig = inspect.signature(origin_execute)
-        has_ui_outputs = len(sig.parameters) >= 11
-
-        async def swizzle_execute(
-            server,
-            dynprompt,
-            caches,
-            current_item,
-            extra_data,
-            executed,
-            prompt_id,
-            execution_list,
-            pending_subgraph_results,
-            pending_async_nodes,
-            ui_outputs=None,
-        ):
-            unique_id = current_item
-            class_type = dynprompt.get_node(unique_id)["class_type"]
-            last_node_id = server.last_node_id
-
-            # Build args list - add ui_outputs only for v0.3.68+
-            args = [
-                server,
-                dynprompt,
-                caches,
-                current_item,
-                extra_data,
-                executed,
-                prompt_id,
-                execution_list,
-                pending_subgraph_results,
-                pending_async_nodes,
-            ]
-            if has_ui_outputs:
-                args.append(ui_outputs)
-
-            result = await origin_execute(*args)
-
-            handle_execute(class_type, last_node_id, prompt_id, server, unique_id)
-            return result
-    else:
-        # Sync version for very old ComfyUI versions
-        def swizzle_execute(
-            server,
-            dynprompt,
-            caches,
-            current_item,
-            extra_data,
-            executed,
-            prompt_id,
-            execution_list,
-            pending_subgraph_results,
-        ):
-            unique_id = current_item
-            class_type = dynprompt.get_node(unique_id)["class_type"]
-            last_node_id = server.last_node_id
-
-            result = origin_execute(
-                server,
-                dynprompt,
-                caches,
-                current_item,
-                extra_data,
-                executed,
-                prompt_id,
-                execution_list,
-                pending_subgraph_results,
-            )
-
-            handle_execute(class_type, last_node_id, prompt_id, server, unique_id)
-            return result
-
-    execution.execute = swizzle_execute
-except Exception:
-    pass
+install_execute_hook(execution, handle_execute)
 
 
 def format_table(headers, data):
